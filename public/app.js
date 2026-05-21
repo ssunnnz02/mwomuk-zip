@@ -526,25 +526,35 @@ document.getElementById('random-btn').addEventListener('click', () => {
   cards.forEach(c => c.classList.remove('roulette-winner', 'roulette-loser', 'roulette-flash'));
 
   const winnerIdx = Math.floor(Math.random() * cards.length);
-  // 1바퀴 + winner 위치에서 멈춤
-  const totalSteps = cards.length + winnerIdx + 1;
+
+  // ── 시간 예산 기반 계산 (항상 7초 이내) ──
+  const BUDGET     = 6800;   // 총 애니메이션 예산 (ms)
+  const FAST_MS    = 40;     // 빠른 구간 한 스텝 시간 (ms)
+  const SLOW_N     = 12;     // 감속 스텝 수
+  const SLOW_ALLOC = 2200;   // 감속 구간에 배정된 시간 (ms)
+  const MAX_FAST   = Math.floor((BUDGET - SLOW_ALLOC) / FAST_MS); // 최대 빠른 스텝 수
+
+  // winnerIdx에 정확히 착지하면서 MAX_FAST+SLOW_N 이하인 최대 totalSteps
+  let totalSteps = winnerIdx + 1;
+  while (totalSteps + cards.length <= MAX_FAST + SLOW_N) {
+    totalSteps += cards.length;
+  }
+
+  const fastSteps  = Math.max(1, totalSteps - SLOW_N);
+  const slowBudget = BUDGET - fastSteps * FAST_MS;
+  const maxDelay   = Math.max(FAST_MS + 10, Math.round(2 * slowBudget / SLOW_N - FAST_MS));
+  const slowDelays = Array.from({ length: SLOW_N }, (_, i) =>
+    Math.round(FAST_MS + (i / (SLOW_N - 1)) * (maxDelay - FAST_MS))
+  );
+
   let step = 0;
-  let delay = 45;
-
   function tick() {
-    // 이전 flash 제거
     if (step > 0) cards[(step - 1) % cards.length].classList.remove('roulette-flash');
-
     const idx = step % cards.length;
     cards[idx].classList.add('roulette-flash');
     step++;
-
-    // 마지막 15칸부터 점점 느려짐
-    if (step > totalSteps - 15) {
-      delay = Math.min(delay * 1.22, 280);
-    }
-
     if (step < totalSteps) {
+      const delay = step < fastSteps ? FAST_MS : slowDelays[step - fastSteps];
       setTimeout(tick, delay);
     } else {
       // 최종 결과
@@ -557,7 +567,7 @@ document.getElementById('random-btn').addEventListener('click', () => {
     }
   }
 
-  tick();
+  setTimeout(tick, FAST_MS);
 });
 
 // ── 헤더 이모지 사이클 애니메이션 ──
