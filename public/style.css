@@ -473,8 +473,10 @@ main {
 .search-btn:active { transform: translateY(1px); }
 
 /* ── RESULTS ── */
-.results-section {
-  margin-top: 18px;
+@media (max-width: 1023px) {
+  .results-section {
+    margin-top: 18px;
+  }
 }
 
 @media (min-width: 1024px) {
