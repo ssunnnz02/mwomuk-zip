@@ -526,10 +526,10 @@ document.getElementById('random-btn').addEventListener('click', () => {
   cards.forEach(c => c.classList.remove('roulette-winner', 'roulette-loser', 'roulette-flash'));
 
   const winnerIdx = Math.floor(Math.random() * cards.length);
-  // 최소 2바퀴 돌고 winner에 정확히 멈춤
-  const totalSteps = cards.length * 2 + winnerIdx;
+  // 1바퀴 + winner 위치에서 멈춤
+  const totalSteps = cards.length + winnerIdx + 1;
   let step = 0;
-  let delay = 60;
+  let delay = 45;
 
   function tick() {
     // 이전 flash 제거
@@ -539,9 +539,9 @@ document.getElementById('random-btn').addEventListener('click', () => {
     cards[idx].classList.add('roulette-flash');
     step++;
 
-    // 마지막 한 바퀴부터 점점 느려짐
-    if (step > totalSteps - cards.length) {
-      delay = Math.min(delay * 1.35, 500);
+    // 마지막 15칸부터 점점 느려짐
+    if (step > totalSteps - 15) {
+      delay = Math.min(delay * 1.22, 280);
     }
 
     if (step < totalSteps) {
