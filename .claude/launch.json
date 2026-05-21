@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "뭐먹zip",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/sunyoung/뭐먹zip/server.js"],
+      "port": 3456
+    }
+  ]
+}
