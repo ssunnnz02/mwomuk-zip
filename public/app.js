@@ -226,6 +226,45 @@ document.getElementById('location-btn').addEventListener('click', () => {
   );
 });
 
+// ── 전체 초기화 버튼 ──
+document.getElementById('reset-btn').addEventListener('click', () => {
+  // filterGroups 초기화
+  filterGroups.type = 'all';
+  filterGroups.foods.clear();
+  filterGroups.conditions.clear();
+  filterGroups.location = '';
+  filterGroups.lat = null;
+  filterGroups.lng = null;
+  userLat = null;
+  userLng = null;
+
+  // 자리 버튼: 상관없음 active
+  typeGroup.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  typeGroup.querySelector('[data-value="all"]').classList.add('active');
+
+  // 메뉴·조건 버튼: 전체 해제
+  document.getElementById('filter-food').querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.remove('active');
+    if (b.dataset.value === 'all') b.classList.add('active');
+  });
+  document.getElementById('filter-condition').querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.remove('active');
+  });
+
+  // 위치 입력창 + 버튼 초기화
+  document.getElementById('location-input').value = '';
+  document.getElementById('location-btn').textContent = '🗺️ 현재 위치';
+
+  // 결과 영역 초기화
+  document.getElementById('results-list').innerHTML = '';
+  document.getElementById('results-title').style.display = 'none';
+  document.getElementById('random-btn').style.display = 'none';
+  document.getElementById('condition-notice').style.display = 'none';
+  document.getElementById('results-placeholder').style.display = 'block';
+  document.getElementById('results-placeholder').querySelector('p').innerHTML =
+    '필터를 선택하고<br><strong>맛집 찾기</strong>를 눌러보세요';
+});
+
 // ── 검색 버튼 ──
 document.getElementById('search-btn').addEventListener('click', async () => {
   const locationText = document.getElementById('location-input').value.trim();
@@ -465,7 +504,13 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
     list.appendChild(card);
   });
 
-  document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+  // 모바일: 결과 섹션으로 스크롤 / 데스크탑: 결과 패널 상단으로 스크롤
+  const resultsSection = document.getElementById('results-section');
+  if (window.innerWidth >= 1024) {
+    resultsSection.scrollTo({ top: 0, behavior: 'smooth' });
+  } else {
+    resultsSection.scrollIntoView({ behavior: 'smooth' });
+  }
 }
 
 // ── 랜덤 뽑기 ──
