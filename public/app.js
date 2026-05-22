@@ -373,8 +373,12 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     const dedupe = (arr) => [...new Map(arr.map(p => [p.id, p])).values()];
 
     if (filterGroups.menuText) {
-      // 직접 입력: 카테고리 제한 없이 검색
-      places = await smartFetch(filterGroups.menuText, null);
+      // 직접 입력: FD6(음식점) + CE7(카페) 병렬 검색 후 합치기
+      const [foodRes, cafeRes] = await Promise.all([
+        smartFetch(filterGroups.menuText, 'FD6'),
+        smartFetch(filterGroups.menuText, 'CE7'),
+      ]);
+      places = dedupe([...foodRes, ...cafeRes]);
     } else if (isCafeOnly) {
       places = await smartFetch('카페', 'CE7');
     } else {
