@@ -306,167 +306,105 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 document.getElementById('search-btn').addEventListener('click', async () => {
   const locationText = document.getElementById('location-input').value.trim();
 
+  if (!KAKAO_API_KEY) {
+    alert('카카오 API 키를 app.js 파일에 입력해주세요!');
+    return;
+  }
+
   setLoading(true);
 
   try {
     let lat = filterGroups.lat;
     let lng = filterGroups.lng;
 
+    // GPS 버튼으로 검색했는지 여부 (거리 표시 기준 결정)
     const isGpsSearch = (locationText === '현재 위치');
 
-    // ── 위치 텍스트 처리: 좌표 변환 + 네이버 쿼리용 동네명 추출 ──
-    let locationQueryText = '';
+    // 텍스트 입력인 경우 좌표로 변환
     if (locationText && !isGpsSearch) {
-      // 텍스트 → 카카오 키워드 검색 → 좌표 + 주소
       const coords = await geocode(locationText);
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-        // 주소에서 동네명(동/구) 추출 → 네이버 쿼리에 사용
-        // 예: "스프링앤플라워" → 주소 "강남구 삼성동 613-20" → "삼성동"
-        // 예: "역삼역"         → 주소 "강남구 역삼동"          → "역삼동"
-        const nb = extractNeighborhood(coords.addressName, coords.roadAddressName);
-        locationQueryText = nb ? ` ${nb}` : ` ${locationText}`;
-      } else {
-        locationQueryText = ` ${locationText}`;
+      if (!coords) {
+        alert('위치를 찾지 못했어요. 다시 입력해보세요.');
+        setLoading(false);
+        return;
       }
-    } else if (isGpsSearch && lat && lng) {
-      try {
-        const rgRes = await fetch(
-          `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${lng}&y=${lat}`,
-          { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
-        );
-        const rgData = await rgRes.json();
-        const region = rgData.documents?.[1] || rgData.documents?.[0];
-        if (region) {
-          locationQueryText = ` ${region.region_3depth_name || region.region_2depth_name}`;
-        }
-      } catch (e) {}
+      lat = coords.lat;
+      lng = coords.lng;
     }
 
-    // 자리 유형 → 검색 접두사
-    const TYPE_PREFIX = { solo: '혼밥', couple: '', small: '소모임', group: '단체', all: '' };
-    const typePrefix = TYPE_PREFIX[filterGroups.type] || '';
-
-    // 검색 키워드 조합 (자리 유형 + 음식 종류)
+    // 검색 키워드 조합
     const foodKeys = [...filterGroups.foods];
     const queries = foodKeys.length > 0
-      ? foodKeys.map(f => `${typePrefix ? typePrefix + ' ' : ''}${FOOD_KEYWORDS[f] || f}`)
-      : [typePrefix ? `${typePrefix} 맛집` : '맛집'];
+      ? foodKeys.map(f => FOOD_KEYWORDS[f] || f)
+      : ['맛집'];
 
-    // 조건 키워드 조합
+    // 조건 키워드 조합 (예약, 주차, 룸, 테라스, 포장)
     const conditionSuffix = [...filterGroups.conditions]
       .filter(c => CONDITION_KEYWORDS[c])
       .map(c => CONDITION_KEYWORDS[c])
       .join(' ');
 
-    // 중복 제거 헬퍼
-    // 전화번호가 있으면 이름+전화번호(지점 구별 확실), 없으면 이름+주소 앞 20자
-    const dedupe = (arr) => {
-      const seen = new Set();
-      return arr.filter(p => {
-        const key = p.place_name + (p.phone ? p.phone : p.road_address_name.slice(0, 20));
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    };
+    // 카페 포함 여부에 따라 카테고리 코드 결정
+    const isCafeOnly = foodKeys.length === 1 && foodKeys[0] === 'cafe';
+    const hasCafe = foodKeys.includes('cafe');
 
-    // GPS 검색이 아닐 때만 원본 위치 텍스트를 쿼리에 사용
-    const rawLoc = !isGpsSearch ? locationText : '';
+    const locationSuffix = locationText && locationText !== '현재 위치' ? ` ${locationText}` : '';
 
-    // ── 카테고리 검색: 네이버 API + 카테고리 후처리 필터 ──
-    async function smartFetchCategory(baseKeyword) {
-      const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
+    let places = [];
 
-      // 원본 장소명(rawLoc) 우선 → 동네명(locationQueryText) → 전국
-      // "한식 스프링앤플라워" "한식 대전송촌초등학교" 처럼 네이버가 위치 파악 가능
+    // ── 3단계 폴백 검색 ──
+    // 1단계: 음식종류 + 조건 + 위치
+    // 2단계: 결과 없으면 조건 제거
+    // 3단계: 그래도 없으면 '맛집'으로 폴백
+    async function smartFetch(baseKeyword, category) {
       const steps = [
-        rawLoc                    ? `${full} ${rawLoc}`                    : null,
-        locationQueryText?.trim() ? `${full}${locationQueryText}`          : null,
-        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`        : null,
-        locationQueryText?.trim() && full !== baseKeyword
-                                  ? `${baseKeyword}${locationQueryText}`   : null,
+        `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationSuffix}`,
+        `${baseKeyword}${locationSuffix}`,
         baseKeyword,
-      ].filter(q => q && q.trim());
-
-      let bestUnfiltered = null; // 거리 필터 통과 못해도 쓸 수 있는 결과 보관
-
-      for (const q of [...new Set(steps)]) {
-        const r = await fetchPlacesNaver(q);
-        const categorized = filterByFoodCategory(r, baseKeyword);
-        if (categorized.length > 0) {
-          if (lat && lng) {
-            const f5 = categorized.filter(p => {
-              const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
-              return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 5000;
-            });
-            if (f5.length > 0) return f5;
-            const f10 = categorized.filter(p => {
-              const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
-              return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 10000;
-            });
-            if (f10.length > 0) return f10;
-            // 거리 필터 실패 → rawLoc 쿼리 결과 저장 (좌표가 틀렸을 수 있음)
-            if (rawLoc && q.includes(rawLoc) && !bestUnfiltered) bestUnfiltered = categorized;
-          } else {
-            return categorized;
-          }
-        }
-      }
-      // 모든 거리 필터 실패 → rawLoc 결과 반환 (네이버 자체 위치 판단 신뢰)
-      return bestUnfiltered || [];
-    }
-
-    // ── 직접입력 검색: 네이버 API (특정 메뉴 커버리지 우수) ──
-    async function smartFetchNaver(baseKeyword) {
-      const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
-      // 원본 장소명 우선, 동네명 차선
-      const steps = [
-        rawLoc                    ? `${full} ${rawLoc}`                  : null,
-        locationQueryText?.trim() ? `${full}${locationQueryText}`        : null,
-        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`      : null,
-        locationQueryText?.trim() && full !== baseKeyword
-                                  ? `${baseKeyword}${locationQueryText}` : null,
-        baseKeyword,
-      ].filter(q => q && q.trim());
-
-      for (const query of [...new Set(steps)]) {
-        const result = await fetchPlacesNaver(query);
+      ];
+      for (const query of steps) {
+        const result = await fetchPlaces({ query, lat, lng, category });
         if (result.length > 0) return result;
       }
       return [];
     }
 
-    let places = [];
+    // 중복 제거 헬퍼 (place id 기준)
+    const dedupe = (arr) => [...new Map(arr.map(p => [p.id, p])).values()];
+
     if (filterGroups.menuText) {
-      // 직접 입력 메뉴 (메밀소바, 돈까스 등) → 네이버 API
-      places = await smartFetchNaver(filterGroups.menuText);
-      // 네이버는 좌표 필터링 없으므로 후처리로 5km 이내만 남김
-      if (lat && lng) {
-        places = places.filter(p => {
-          const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
-          if (!pLat || !pLng) return true;
-          return calcDistance(lat, lng, pLat, pLng) <= 5000;
-        });
-      }
+      // 직접 입력: FD6(음식점) + CE7(카페) 병렬 검색 후 합치기
+      const [foodRes, cafeRes] = await Promise.all([
+        smartFetch(filterGroups.menuText, 'FD6'),
+        smartFetch(filterGroups.menuText, 'CE7'),
+      ]);
+      places = dedupe([...foodRes, ...cafeRes]);
+    } else if (isCafeOnly) {
+      places = await smartFetch('카페', 'CE7');
     } else {
-      // 카테고리 선택 (한식, 치킨 등) → 네이버 API + 카테고리 필터 + 거리 필터
-      const results = await Promise.all(queries.map(kw => smartFetchCategory(kw)));
-      places = results.flat();
+      const nonCafeKeywords = queries.filter(q => q !== '카페');
+      const searchTargets = nonCafeKeywords.length > 0 ? nonCafeKeywords : ['맛집'];
+
+      // 각 카테고리를 독립적으로 병렬 검색 후 합치기
+      const results = await Promise.all(searchTargets.map(kw => smartFetch(kw, 'FD6')));
+      places = dedupe(results.flat());
+
+      if (hasCafe) {
+        const cafes = await smartFetch('카페', 'CE7');
+        places = dedupe([...places, ...cafes]);
+      }
     }
-    places = dedupe(places);
 
     showResults(places, lat, lng, conditionSuffix, [...filterGroups.conditions], isGpsSearch);
   } catch (e) {
     console.error(e);
-    alert('검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.');
+    alert('검색 중 오류가 발생했어요. API 키와 인터넷 연결을 확인해주세요.');
   } finally {
     setLoading(false);
   }
 });
 
-// ── 카카오 API: 텍스트 → 좌표 + 주소 ──
+// ── 카카오 API: 텍스트 → 좌표 ──
 async function geocode(query) {
   const res = await fetch(
     `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=1`,
@@ -474,78 +412,35 @@ async function geocode(query) {
   );
   const data = await res.json();
   if (data.documents?.length > 0) {
-    const doc = data.documents[0];
-    return {
-      lat: parseFloat(doc.y),
-      lng: parseFloat(doc.x),
-      addressName:     doc.address_name      || '',
-      roadAddressName: doc.road_address_name || ''
-    };
+    return { lat: parseFloat(data.documents[0].y), lng: parseFloat(data.documents[0].x) };
   }
   return null;
 }
 
-// ── 네이버 카테고리 필터 ──
-// 음식 카테고리 버튼 선택 시 관련 없는 결과 제거
-// 예: "치킨" 검색 → 술집(맥주,호프) 제거 / "한식" 검색 → 일식 제거
-// 매칭 결과가 0개면 필터 없이 반환 (너무 엄격하지 않게)
-function filterByFoodCategory(results, keyword) {
-  if (!keyword || keyword === '맛집') return results;
-  const matched = results.filter(p => (p.category_name || '').includes(keyword));
-  return matched.length > 0 ? matched : results;
-}
+// ── 카카오 API: 장소 검색 ──
+async function fetchPlaces({ query, lat, lng, category }) {
+  const baseParams = { query, size: 15, sort: 'accuracy' };
+  // 좌표가 있을 때만 위치 반경 적용, 없으면 전국 검색
+  if (lat && lng) {
+    baseParams.x = lng;
+    baseParams.y = lat;
+    baseParams.radius = 5000;
+  }
+  if (category) baseParams.category_group_code = category;
 
-// ── 주소에서 동네명(동/구/시) 추출 ──
-// "서울특별시 강남구 삼성동 613-20" → "삼성동"
-// "서울특별시 강남구 봉은사로22길 32" → "강남구"
-function extractNeighborhood(addressName, roadAddressName) {
-  const addr = addressName || roadAddressName || '';
-  const parts = addr.trim().split(/\s+/);
-  const dong = parts.find(p => /[동읍면리]$/.test(p) && p.length >= 2);
-  if (dong) return dong;
-  const gu   = parts.find(p => /[구군]$/.test(p) && p.length >= 2);
-  if (gu)   return gu;
-  return null;
-}
-
-// ── 네이버 API: 장소 검색 (서버 프록시 경유) ──
-function naverToPlace(item) {
-  const name = item.title.replace(/<\/?b>/g, '');
-  // mapx/mapy: 네이버는 WGS84 × 10^7 정수
-  const lng = parseInt(item.mapx) / 10000000;
-  const lat = parseInt(item.mapy) / 10000000;
-  const shortAddr = (item.roadAddress || item.address || '').split(' ').slice(0, 3).join(' ');
-  const naverMapUrl = `https://map.naver.com/v5/search/${encodeURIComponent(name + ' ' + shortAddr)}`;
-  const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(name)}`;
-  return {
-    id:               name + (item.roadAddress || item.address),
-    place_name:       name,
-    address_name:     item.address     || '',
-    road_address_name: item.roadAddress || '',
-    phone:            item.telephone   || '',
-    place_url:        naverMapUrl,      // 네이버지도 검색 링크
-    kakao_url:        kakaoMapUrl,      // 카카오맵 검색 링크
-    category_name:    item.category    || '',
-    x:                String(lng),
-    y:                String(lat),
-    distance:         '',
-  };
-}
-
-async function fetchPlacesNaver(query) {
-  // 네이버 지역검색: 한 번에 최대 5개, 6페이지 병렬 = 최대 30개
-  const starts = [1, 6, 11, 16, 21, 26];
-  const results = await Promise.all(
-    starts.map(start =>
-      fetch(`/api/search?${new URLSearchParams({ query, display: 5, start })}`)
-        .then(r => r.json())
-        .then(d => (d.items || []).map(naverToPlace))
-        .catch(() => [])
+  const [res1, res2] = await Promise.all([
+    fetch(
+      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 1 })}`,
+      { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
+    ),
+    fetch(
+      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 2 })}`,
+      { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
     )
-  );
-  return results.flat();
+  ]);
+  const [data1, data2] = await Promise.all([res1.json(), res2.json()]);
+  return [...(data1.documents || []), ...(data2.documents || [])];
 }
-
 
 // ── 로딩 상태 ──
 function setLoading(on) {
@@ -589,32 +484,31 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
   randomBtn.style.display = 'block';
   randomBtn.textContent = '🎲 랜덤 뽑기';
 
-  // 거리 계산: GPS면 실제 내 위치 기준, 텍스트 입력이면 검색 중심 기준
-  const refLat = (isGpsSearch && userLat) ? userLat : lat;
-  const refLng = (isGpsSearch && userLng) ? userLng : lng;
+  // 거리 계산:
+  // GPS 검색 → 실제 내 위치(userLat/userLng) 기준 Haversine
+  // 텍스트 검색 → 카카오 API가 반환한 place.distance (검색 중심 기준)
+  const fromUser = isGpsSearch && !!(userLat && userLng);
 
   function formatDist(place) {
-    if (!refLat || !refLng) return '';
-    const placeLat = parseFloat(place.y);
-    const placeLng = parseFloat(place.x);
-    if (!placeLat || !placeLng) return '';
-    const d = calcDistance(refLat, refLng, placeLat, placeLng);
+    let d;
+    if (fromUser) {
+      d = calcDistance(userLat, userLng, parseFloat(place.y), parseFloat(place.x));
+    } else {
+      d = parseInt(place.distance);
+    }
     if (!d) return '';
     return d < 1000 ? `${d}m` : `${(d / 1000).toFixed(1)}km`;
   }
 
   // 카테고리로 이모지 매핑
   function categoryEmoji(categoryName) {
-    if (categoryName.includes('카페') || categoryName.includes('디저트') || categoryName.includes('베이커리')) return '☕';
+    if (categoryName.includes('카페') || categoryName.includes('디저트')) return '☕';
     if (categoryName.includes('일식') || categoryName.includes('스시') || categoryName.includes('라멘')) return '🍣';
     if (categoryName.includes('한식') || categoryName.includes('분식')) return '🍲';
     if (categoryName.includes('중식')) return '🥟';
     if (categoryName.includes('양식') || categoryName.includes('이탈리') || categoryName.includes('피자')) return '🍝';
-    if (categoryName.includes('치킨')) return '🍗';
-    if (categoryName.includes('햄버거') || categoryName.includes('패스트푸드')) return '🍔';
-    if (categoryName.includes('샌드위치')) return '🥪';
+    if (categoryName.includes('치킨') || categoryName.includes('버거')) return '🍗';
     if (categoryName.includes('고기') || categoryName.includes('삼겹') || categoryName.includes('구이')) return '🥩';
-    if (categoryName.includes('술집') || categoryName.includes('호프') || categoryName.includes('이자카야') || categoryName.includes('포차')) return '🍻';
     return '🍽️';
   }
 
@@ -624,14 +518,21 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
 
     const dist = formatDist(place);
     const emoji = categoryEmoji(place.category_name);
-    const categoryShort = place.category_name.split('>').slice(-2).join(' · ');
+    const categoryShort = place.category_name.split(' > ').slice(-2).join(' · ');
     const address = place.road_address_name || place.address_name;
 
+    // 네이버 검색용: 지점명(~점, ~호점, ~본점) 제거 + 짧은 주소 추가
+    const baseName = place.place_name
+      .replace(/\s+[가-힣\d·\-]+[점호]$/, '')  // 논현본점, 강남점, 2호점 등 제거
+      .replace(/\s+본점$/, '')                   // 독립된 '본점' 제거
+      .trim() || place.place_name;
+    const shortAddr = address.split(' ').slice(0, 3).join(' '); // 서울 강남구 논현로
+    const naverQuery = encodeURIComponent(`${baseName} ${shortAddr}`);
 
     card.innerHTML = `
       <div class="card-top">
         <span class="category">${categoryShort}</span>
-        ${dist ? `<span class="dist-badge">📍 ${isGpsSearch ? '내 위치에서 ' : ''}${dist}</span>` : ''}
+        ${dist ? `<span class="dist-badge">📍 ${fromUser ? '내 위치에서 ' : ''}${dist}</span>` : ''}
       </div>
       <div class="name">
         <span class="card-emoji">${emoji}</span> ${place.place_name}
@@ -640,8 +541,8 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
       ${place.phone ? `<div class="phone">📞 ${place.phone}</div>` : ''}
       <div class="tags"></div>
       <div class="card-links">
-        <a class="map-link naver" href="${place.place_url}" target="_blank">🗺️ 네이버지도</a>
-        <a class="map-link menu" href="${place.kakao_url}" target="_blank">🗺️ 카카오맵</a>
+        <a class="map-link menu" href="${place.place_url}" target="_blank">🍽️ 메뉴·가격 보기</a>
+        <a class="map-link naver" href="https://map.naver.com/v5/search/${naverQuery}" target="_blank">🗺️ 네이버지도</a>
       </div>
     `;
     list.appendChild(card);
