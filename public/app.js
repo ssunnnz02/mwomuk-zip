@@ -314,18 +314,22 @@ document.getElementById('search-btn').addEventListener('click', async () => {
 
     const isGpsSearch = (locationText === '현재 위치');
 
-    // 텍스트 입력인 경우 좌표로 변환 (거리 표시용)
-    if (locationText && !isGpsSearch) {
-      const coords = await geocode(locationText);
-      if (coords) { lat = coords.lat; lng = coords.lng; }
-    }
-
-    // 네이버 쿼리에 포함할 위치 텍스트
-    // - 텍스트 입력: 원본 그대로 사용 ("스프링앤플라워", "역삼역" 등)
-    // - GPS: 좌표→역지오코딩으로 동네명 추출
+    // ── 위치 텍스트 처리: 좌표 변환 + 네이버 쿼리용 동네명 추출 ──
     let locationQueryText = '';
     if (locationText && !isGpsSearch) {
-      locationQueryText = ` ${locationText}`;
+      // 텍스트 → 카카오 키워드 검색 → 좌표 + 주소
+      const coords = await geocode(locationText);
+      if (coords) {
+        lat = coords.lat;
+        lng = coords.lng;
+        // 주소에서 동네명(동/구) 추출 → 네이버 쿼리에 사용
+        // 예: "스프링앤플라워" → 주소 "강남구 삼성동 613-20" → "삼성동"
+        // 예: "역삼역"         → 주소 "강남구 역삼동"          → "역삼동"
+        const nb = extractNeighborhood(coords.addressName, coords.roadAddressName);
+        locationQueryText = nb ? ` ${nb}` : ` ${locationText}`;
+      } else {
+        locationQueryText = ` ${locationText}`;
+      }
     } else if (isGpsSearch && lat && lng) {
       try {
         const rgRes = await fetch(
@@ -406,7 +410,7 @@ document.getElementById('search-btn').addEventListener('click', async () => {
   }
 });
 
-// ── 카카오 API: 텍스트 → 좌표 ──
+// ── 카카오 API: 텍스트 → 좌표 + 주소 ──
 async function geocode(query) {
   const res = await fetch(
     `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=1`,
@@ -414,8 +418,27 @@ async function geocode(query) {
   );
   const data = await res.json();
   if (data.documents?.length > 0) {
-    return { lat: parseFloat(data.documents[0].y), lng: parseFloat(data.documents[0].x) };
+    const doc = data.documents[0];
+    return {
+      lat: parseFloat(doc.y),
+      lng: parseFloat(doc.x),
+      addressName:     doc.address_name      || '',
+      roadAddressName: doc.road_address_name || ''
+    };
   }
+  return null;
+}
+
+// ── 주소에서 동네명(동/구/시) 추출 ──
+// "서울특별시 강남구 삼성동 613-20" → "삼성동"
+// "서울특별시 강남구 봉은사로22길 32" → "강남구"
+function extractNeighborhood(addressName, roadAddressName) {
+  const addr = addressName || roadAddressName || '';
+  const parts = addr.trim().split(/\s+/);
+  const dong = parts.find(p => /[동읍면리]$/.test(p) && p.length >= 2);
+  if (dong) return dong;
+  const gu   = parts.find(p => /[구군]$/.test(p) && p.length >= 2);
+  if (gu)   return gu;
   return null;
 }
 
