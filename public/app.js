@@ -320,11 +320,12 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       if (coords) { lat = coords.lat; lng = coords.lng; }
     }
 
-    // GPS 검색 시 동네명 추출 (네이버 쿼리에 텍스트로 포함)
+    // 좌표 → 동네명으로 변환해서 네이버 쿼리에 포함
+    // (사용자가 "스프링앤플라워" 같은 가게명을 위치에 입력해도
+    //  geocode→역지오코딩으로 "삼성동" 같은 동네명으로 바꿔 쿼리에 사용)
     let locationQueryText = '';
-    if (locationText && !isGpsSearch) {
-      locationQueryText = ` ${locationText}`;
-    } else if (isGpsSearch && lat && lng) {
+    const shouldReverseGeocode = (lat && lng) && (locationText || isGpsSearch);
+    if (shouldReverseGeocode) {
       try {
         const rgRes = await fetch(
           `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${lng}&y=${lat}`,
@@ -335,7 +336,10 @@ document.getElementById('search-btn').addEventListener('click', async () => {
         if (region) {
           locationQueryText = ` ${region.region_3depth_name || region.region_2depth_name}`;
         }
-      } catch (e) {}
+      } catch (e) {
+        // 역지오코딩 실패 시 원본 텍스트 그대로 사용 (폴백)
+        if (!isGpsSearch) locationQueryText = ` ${locationText}`;
+      }
     }
 
     // 검색 키워드 조합
