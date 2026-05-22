@@ -411,6 +411,40 @@ main {
   border-color: var(--sky);
 }
 
+/* ── 메뉴 직접 입력 ── */
+.menu-direct-wrap {
+  margin-top: 8px;
+}
+#menu-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid rgba(150,200,240,0.5);
+  border-radius: 14px;
+  font-size: 13px;
+  font-family: 'Noto Sans KR', sans-serif;
+  font-weight: 700;
+  outline: none;
+  background: rgba(255,255,255,0.75);
+  color: #1a3a5a;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+#menu-input:focus {
+  border-color: var(--sky);
+  background: white;
+  box-shadow: 0 0 0 3px rgba(106,184,247,0.18);
+}
+#menu-input.has-text {
+  border-color: #ff8ae0;
+  background: rgba(255,240,252,0.9);
+  box-shadow: 0 0 0 3px rgba(255,138,224,0.18);
+}
+/* 직접 입력 중일 때 카테고리 버튼 흐리게 */
+#filter-food.dimmed .filter-btn {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
 /* ── SEARCH BUTTON ── */
 .search-btn-wrap {
   padding: 4px 0;

@@ -45,7 +45,8 @@ const filterGroups = {
   conditions: new Set(),
   location: '',
   lat: null,
-  lng: null
+  lng: null,
+  menuText: ''  // 직접 입력 메뉴명
 };
 
 // ── 자리 유형: 단일 선택 ──
@@ -61,8 +62,18 @@ typeGroup.querySelectorAll('.filter-btn').forEach(btn => {
 // ── 메뉴: 복수 선택 ──
 const foodGroup = document.getElementById('filter-food');
 const foodAllBtn = foodGroup.querySelector('[data-value="all"]');
+
+function clearMenuInput() {
+  const el = document.getElementById('menu-input');
+  el.value = '';
+  filterGroups.menuText = '';
+  el.classList.remove('has-text');
+  foodGroup.classList.remove('dimmed');
+}
+
 foodGroup.querySelectorAll('.filter-btn.toggle').forEach(btn => {
   btn.addEventListener('click', () => {
+    clearMenuInput();
     const val = btn.dataset.value;
     if (filterGroups.foods.has(val)) {
       filterGroups.foods.delete(val);
@@ -79,9 +90,28 @@ foodGroup.querySelectorAll('.filter-btn.toggle').forEach(btn => {
   });
 });
 foodAllBtn.addEventListener('click', () => {
+  clearMenuInput();
   filterGroups.foods.clear();
   foodGroup.querySelectorAll('.filter-btn.toggle').forEach(b => b.classList.remove('active'));
   foodAllBtn.classList.add('active');
+});
+
+// ── 직접 입력 메뉴명 ──
+document.getElementById('menu-input').addEventListener('input', (e) => {
+  const val = e.target.value.trim();
+  filterGroups.menuText = val;
+  if (val) {
+    e.target.classList.add('has-text');
+    foodGroup.classList.add('dimmed');
+    // 카테고리 버튼 선택 해제
+    filterGroups.foods.clear();
+    foodGroup.querySelectorAll('.filter-btn.toggle').forEach(b => b.classList.remove('active'));
+    foodAllBtn.classList.remove('active');
+  } else {
+    e.target.classList.remove('has-text');
+    foodGroup.classList.remove('dimmed');
+    foodAllBtn.classList.add('active');
+  }
 });
 
 // ── 조건: 복수 선택 ──
@@ -235,8 +265,15 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   filterGroups.location = '';
   filterGroups.lat = null;
   filterGroups.lng = null;
+  filterGroups.menuText = '';
   userLat = null;
   userLng = null;
+
+  // 직접 입력창 초기화
+  const menuInput = document.getElementById('menu-input');
+  menuInput.value = '';
+  menuInput.classList.remove('has-text');
+  foodGroup.classList.remove('dimmed');
 
   // 자리 버튼: 상관없음 active
   typeGroup.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -335,7 +372,10 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     // 중복 제거 헬퍼 (place id 기준)
     const dedupe = (arr) => [...new Map(arr.map(p => [p.id, p])).values()];
 
-    if (isCafeOnly) {
+    if (filterGroups.menuText) {
+      // 직접 입력: 카테고리 제한 없이 검색
+      places = await smartFetch(filterGroups.menuText, null);
+    } else if (isCafeOnly) {
       places = await smartFetch('카페', 'CE7');
     } else {
       const nonCafeKeywords = queries.filter(q => q !== '카페');
