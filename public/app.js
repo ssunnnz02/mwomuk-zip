@@ -376,23 +376,24 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     const rawLoc = !isGpsSearch ? locationText : '';
 
     // ── 카테고리 검색: 네이버 API + 카테고리 후처리 필터 ──
-    // 카카오 키워드 검색은 이름에 "한식"이 있는 가게만 → 5개
-    // 네이버는 카테고리 기반 → 수십 개 (훨씬 많음)
     async function smartFetchCategory(baseKeyword) {
       const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
 
+      // 원본 장소명(rawLoc) 우선 → 동네명(locationQueryText) → 전국
+      // "한식 스프링앤플라워" "한식 대전송촌초등학교" 처럼 네이버가 위치 파악 가능
       const steps = [
-        locationQueryText?.trim() ? `${full}${locationQueryText}`          : null,
         rawLoc                    ? `${full} ${rawLoc}`                    : null,
+        locationQueryText?.trim() ? `${full}${locationQueryText}`          : null,
+        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`        : null,
         locationQueryText?.trim() && full !== baseKeyword
                                   ? `${baseKeyword}${locationQueryText}`   : null,
-        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`        : null,
         baseKeyword,
       ].filter(q => q && q.trim());
 
+      let bestUnfiltered = null; // 거리 필터 통과 못해도 쓸 수 있는 결과 보관
+
       for (const q of [...new Set(steps)]) {
         const r = await fetchPlacesNaver(q);
-        // 카테고리 필터: "한식"→한식만, "치킨"→치킨만 (술집 제거 등)
         const categorized = filterByFoodCategory(r, baseKeyword);
         if (categorized.length > 0) {
           if (lat && lng) {
@@ -401,28 +402,32 @@ document.getElementById('search-btn').addEventListener('click', async () => {
               return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 5000;
             });
             if (f5.length > 0) return f5;
-            // 5km 내 없으면 10km로 확장
             const f10 = categorized.filter(p => {
               const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
               return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 10000;
             });
             if (f10.length > 0) return f10;
+            // 거리 필터 실패 → rawLoc 쿼리 결과 저장 (좌표가 틀렸을 수 있음)
+            if (rawLoc && q.includes(rawLoc) && !bestUnfiltered) bestUnfiltered = categorized;
           } else {
             return categorized;
           }
         }
       }
-      return [];
+      // 모든 거리 필터 실패 → rawLoc 결과 반환 (네이버 자체 위치 판단 신뢰)
+      return bestUnfiltered || [];
     }
 
     // ── 직접입력 검색: 네이버 API (특정 메뉴 커버리지 우수) ──
     async function smartFetchNaver(baseKeyword) {
       const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
+      // 원본 장소명 우선, 동네명 차선
       const steps = [
-        locationQueryText?.trim() ? `${full}${locationQueryText}`      : null,
-        rawLoc                    ? `${full} ${rawLoc}`                : null,
-        locationQueryText?.trim() ? `${baseKeyword}${locationQueryText}` : null,
-        rawLoc                    ? `${baseKeyword} ${rawLoc}`         : null,
+        rawLoc                    ? `${full} ${rawLoc}`                  : null,
+        locationQueryText?.trim() ? `${full}${locationQueryText}`        : null,
+        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`      : null,
+        locationQueryText?.trim() && full !== baseKeyword
+                                  ? `${baseKeyword}${locationQueryText}` : null,
         baseKeyword,
       ].filter(q => q && q.trim());
 
