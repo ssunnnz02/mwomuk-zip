@@ -368,8 +368,31 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       });
     };
 
-    // ── 3단계 폴백 검색 (네이버 API) ──
-    async function smartFetch(baseKeyword) {
+    // ── 카테고리 검색: 카카오 API (카테고리 정확, 반경 5km 지원) ──
+    async function smartFetchKakao(baseKeyword) {
+      if (lat && lng) {
+        // 좌표 있음 → 반경 5km 내 검색 (조건 포함 → 조건 없이 순서로 시도)
+        const withCond = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
+        const r1 = await fetchPlacesKakao(withCond, lat, lng);
+        if (r1.length > 0) return r1;
+        return fetchPlacesKakao(baseKeyword, lat, lng);
+      } else {
+        // 좌표 없음 → 키워드+위치텍스트 검색
+        const steps = [
+          `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationQueryText}`,
+          `${baseKeyword}${locationQueryText}`,
+          baseKeyword,
+        ];
+        for (const q of steps) {
+          const r = await fetchPlacesKakao(q, null, null);
+          if (r.length > 0) return r;
+        }
+        return [];
+      }
+    }
+
+    // ── 직접입력 검색: 네이버 API (특정 메뉴 커버리지 우수) ──
+    async function smartFetchNaver(baseKeyword) {
       const steps = [
         `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationQueryText}`,
         `${baseKeyword}${locationQueryText}`,
@@ -384,23 +407,22 @@ document.getElementById('search-btn').addEventListener('click', async () => {
 
     let places = [];
     if (filterGroups.menuText) {
-      places = await smartFetch(filterGroups.menuText);
+      // 직접 입력 메뉴 (메밀소바, 돈까스 등) → 네이버 API
+      places = await smartFetchNaver(filterGroups.menuText);
+      // 네이버는 좌표 필터링 없으므로 후처리로 5km 이내만 남김
+      if (lat && lng) {
+        places = places.filter(p => {
+          const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
+          if (!pLat || !pLng) return true;
+          return calcDistance(lat, lng, pLat, pLng) <= 5000;
+        });
+      }
     } else {
-      const results = await Promise.all(queries.map(kw => smartFetch(kw)));
+      // 카테고리 선택 (치킨, 한식 등) → 카카오 API (반경 5km 자체 지원)
+      const results = await Promise.all(queries.map(kw => smartFetchKakao(kw)));
       places = results.flat();
     }
-    places = dedupe(places);  // 항상 중복 제거 (직접입력·카테고리 모두)
-
-    // ── 위치가 설정된 경우 반경 5km 이내로 필터링 ──
-    // 네이버 API는 좌표 필터링을 지원 안 해서 후처리로 거름
-    if (lat && lng) {
-      places = places.filter(p => {
-        const pLat = parseFloat(p.y);
-        const pLng = parseFloat(p.x);
-        if (!pLat || !pLng) return true;
-        return calcDistance(lat, lng, pLat, pLng) <= 5000;
-      });
-    }
+    places = dedupe(places);
 
     showResults(places, lat, lng, conditionSuffix, [...filterGroups.conditions], isGpsSearch);
   } catch (e) {
@@ -475,6 +497,50 @@ async function fetchPlacesNaver(query) {
       fetch(`/api/search?${new URLSearchParams({ query, display: 5, start })}`)
         .then(r => r.json())
         .then(d => (d.items || []).map(naverToPlace))
+        .catch(() => [])
+    )
+  );
+  return results.flat();
+}
+
+// ── 카카오 API: 카테고리 장소 검색 (카테고리 정확도 우수) ──
+function kakaoToPlace(doc) {
+  const addr = doc.road_address_name || doc.address_name || '';
+  const shortAddr = addr.split(' ').slice(0, 3).join(' ');
+  return {
+    id:               doc.id || (doc.place_name + addr),
+    place_name:       doc.place_name,
+    address_name:     doc.address_name      || '',
+    road_address_name: doc.road_address_name || '',
+    phone:            doc.phone             || '',
+    place_url:        `https://map.naver.com/v5/search/${encodeURIComponent(doc.place_name + ' ' + shortAddr)}`,
+    kakao_url:        doc.place_url         || `https://map.kakao.com/?q=${encodeURIComponent(doc.place_name)}`,
+    category_name:    doc.category_name     || '',
+    x:                doc.x,   // 이미 WGS84 경도
+    y:                doc.y,   // 이미 WGS84 위도
+    distance:         doc.distance          || '',
+  };
+}
+
+async function fetchPlacesKakao(query, lat, lng) {
+  // 카카오 키워드 검색: 최대 15개 × 2페이지 = 30개
+  // 좌표가 있으면 반경 5km 내 거리순 → 정확한 지역 필터링
+  const baseParams = { query, size: 15 };
+  if (lat && lng) {
+    baseParams.x      = lng;     // 카카오: x=경도
+    baseParams.y      = lat;     // 카카오: y=위도
+    baseParams.radius = 5000;
+    baseParams.sort   = 'distance';
+  }
+  const pages = [1, 2];
+  const results = await Promise.all(
+    pages.map(page =>
+      fetch(
+        `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page })}`,
+        { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
+      )
+        .then(r => r.json())
+        .then(d => (d.documents || []).map(kakaoToPlace))
         .catch(() => [])
     )
   );
