@@ -387,8 +387,9 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       places = await smartFetch(filterGroups.menuText);
     } else {
       const results = await Promise.all(queries.map(kw => smartFetch(kw)));
-      places = dedupe(results.flat());
+      places = results.flat();
     }
+    places = dedupe(places);  // 항상 중복 제거 (직접입력·카테고리 모두)
 
     // ── 위치가 설정된 경우 반경 5km 이내로 필터링 ──
     // 네이버 API는 좌표 필터링을 지원 안 해서 후처리로 거름
@@ -467,8 +468,8 @@ function naverToPlace(item) {
 }
 
 async function fetchPlacesNaver(query) {
-  // 네이버 지역검색: 한 번에 최대 5개, 4페이지 병렬 = 최대 20개
-  const starts = [1, 6, 11, 16];
+  // 네이버 지역검색: 한 번에 최대 5개, 6페이지 병렬 = 최대 30개
+  const starts = [1, 6, 11, 16, 21, 26];
   const results = await Promise.all(
     starts.map(start =>
       fetch(`/api/search?${new URLSearchParams({ query, display: 5, start })}`)
