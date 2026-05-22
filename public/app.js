@@ -383,6 +383,17 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       places = dedupe(results.flat());
     }
 
+    // ── 위치가 설정된 경우 반경 5km 이내로 필터링 ──
+    // 네이버 API는 좌표 필터링을 지원 안 해서 후처리로 거름
+    if (lat && lng) {
+      places = places.filter(p => {
+        const pLat = parseFloat(p.y);
+        const pLng = parseFloat(p.x);
+        if (!pLat || !pLng) return true;
+        return calcDistance(lat, lng, pLat, pLng) <= 5000;
+      });
+    }
+
     showResults(places, lat, lng, conditionSuffix, [...filterGroups.conditions], isGpsSearch);
   } catch (e) {
     console.error(e);
