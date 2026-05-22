@@ -428,18 +428,13 @@ async function fetchPlaces({ query, lat, lng, category }) {
   }
   if (category) baseParams.category_group_code = category;
 
-  const [res1, res2] = await Promise.all([
+  const pages = await Promise.all([1, 2, 3].map(page =>
     fetch(
-      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 1 })}`,
+      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page })}`,
       { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
-    ),
-    fetch(
-      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 2 })}`,
-      { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
-    )
-  ]);
-  const [data1, data2] = await Promise.all([res1.json(), res2.json()]);
-  return [...(data1.documents || []), ...(data2.documents || [])];
+    ).then(r => r.json()).then(d => d.documents || []).catch(() => [])
+  ));
+  return pages.flat();
 }
 
 // ── 로딩 상태 ──
