@@ -344,11 +344,15 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       } catch (e) {}
     }
 
-    // 검색 키워드 조합
+    // 자리 유형 → 검색 접두사
+    const TYPE_PREFIX = { solo: '혼밥', couple: '', small: '소모임', group: '단체', all: '' };
+    const typePrefix = TYPE_PREFIX[filterGroups.type] || '';
+
+    // 검색 키워드 조합 (자리 유형 + 음식 종류)
     const foodKeys = [...filterGroups.foods];
     const queries = foodKeys.length > 0
-      ? foodKeys.map(f => FOOD_KEYWORDS[f] || f)
-      : ['맛집'];
+      ? foodKeys.map(f => `${typePrefix ? typePrefix + ' ' : ''}${FOOD_KEYWORDS[f] || f}`)
+      : [typePrefix ? `${typePrefix} 맛집` : '맛집'];
 
     // 조건 키워드 조합
     const conditionSuffix = [...filterGroups.conditions]
@@ -537,49 +541,6 @@ async function fetchPlacesNaver(query) {
   return results.flat();
 }
 
-// ── 카카오 API: 카테고리 장소 검색 (카테고리 정확도 우수) ──
-function kakaoToPlace(doc) {
-  const addr = doc.road_address_name || doc.address_name || '';
-  const shortAddr = addr.split(' ').slice(0, 3).join(' ');
-  return {
-    id:               doc.id || (doc.place_name + addr),
-    place_name:       doc.place_name,
-    address_name:     doc.address_name      || '',
-    road_address_name: doc.road_address_name || '',
-    phone:            doc.phone             || '',
-    place_url:        `https://map.naver.com/v5/search/${encodeURIComponent(doc.place_name + ' ' + shortAddr)}`,
-    kakao_url:        doc.place_url         || `https://map.kakao.com/?q=${encodeURIComponent(doc.place_name)}`,
-    category_name:    doc.category_name     || '',
-    x:                doc.x,   // 이미 WGS84 경도
-    y:                doc.y,   // 이미 WGS84 위도
-    distance:         doc.distance          || '',
-  };
-}
-
-async function fetchPlacesKakao(query, lat, lng) {
-  // 카카오 키워드 검색: 최대 15개 × 2페이지 = 30개
-  // 좌표가 있으면 반경 5km 내 거리순 → 정확한 지역 필터링
-  const baseParams = { query, size: 15 };
-  if (lat && lng) {
-    baseParams.x      = lng;     // 카카오: x=경도
-    baseParams.y      = lat;     // 카카오: y=위도
-    baseParams.radius = 5000;
-    baseParams.sort   = 'distance';
-  }
-  const pages = [1, 2];
-  const results = await Promise.all(
-    pages.map(page =>
-      fetch(
-        `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page })}`,
-        { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
-      )
-        .then(r => r.json())
-        .then(d => (d.documents || []).map(kakaoToPlace))
-        .catch(() => [])
-    )
-  );
-  return results.flat();
-}
 
 // ── 로딩 상태 ──
 function setLoading(on) {
@@ -639,13 +600,16 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
 
   // 카테고리로 이모지 매핑
   function categoryEmoji(categoryName) {
-    if (categoryName.includes('카페') || categoryName.includes('디저트')) return '☕';
+    if (categoryName.includes('카페') || categoryName.includes('디저트') || categoryName.includes('베이커리')) return '☕';
     if (categoryName.includes('일식') || categoryName.includes('스시') || categoryName.includes('라멘')) return '🍣';
     if (categoryName.includes('한식') || categoryName.includes('분식')) return '🍲';
     if (categoryName.includes('중식')) return '🥟';
     if (categoryName.includes('양식') || categoryName.includes('이탈리') || categoryName.includes('피자')) return '🍝';
-    if (categoryName.includes('치킨') || categoryName.includes('버거')) return '🍗';
+    if (categoryName.includes('치킨')) return '🍗';
+    if (categoryName.includes('햄버거') || categoryName.includes('패스트푸드')) return '🍔';
+    if (categoryName.includes('샌드위치')) return '🥪';
     if (categoryName.includes('고기') || categoryName.includes('삼겹') || categoryName.includes('구이')) return '🥩';
+    if (categoryName.includes('술집') || categoryName.includes('호프') || categoryName.includes('이자카야') || categoryName.includes('포차')) return '🍻';
     return '🍽️';
   }
 
@@ -655,7 +619,7 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
 
     const dist = formatDist(place);
     const emoji = categoryEmoji(place.category_name);
-    const categoryShort = place.category_name.split(' > ').slice(-2).join(' · ');
+    const categoryShort = place.category_name.split('>').slice(-2).join(' · ');
     const address = place.road_address_name || place.address_name;
 
 
