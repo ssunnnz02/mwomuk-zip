@@ -306,30 +306,36 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 document.getElementById('search-btn').addEventListener('click', async () => {
   const locationText = document.getElementById('location-input').value.trim();
 
-  if (!KAKAO_API_KEY) {
-    alert('카카오 API 키를 app.js 파일에 입력해주세요!');
-    return;
-  }
-
   setLoading(true);
 
   try {
     let lat = filterGroups.lat;
     let lng = filterGroups.lng;
 
-    // GPS 버튼으로 검색했는지 여부 (거리 표시 기준 결정)
     const isGpsSearch = (locationText === '현재 위치');
 
-    // 텍스트 입력인 경우 좌표로 변환
+    // 텍스트 입력인 경우 좌표로 변환 (거리 표시용)
     if (locationText && !isGpsSearch) {
       const coords = await geocode(locationText);
-      if (!coords) {
-        alert('위치를 찾지 못했어요. 다시 입력해보세요.');
-        setLoading(false);
-        return;
-      }
-      lat = coords.lat;
-      lng = coords.lng;
+      if (coords) { lat = coords.lat; lng = coords.lng; }
+    }
+
+    // GPS 검색 시 동네명 추출 (네이버 쿼리에 텍스트로 포함)
+    let locationQueryText = '';
+    if (locationText && !isGpsSearch) {
+      locationQueryText = ` ${locationText}`;
+    } else if (isGpsSearch && lat && lng) {
+      try {
+        const rgRes = await fetch(
+          `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${lng}&y=${lat}`,
+          { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
+        );
+        const rgData = await rgRes.json();
+        const region = rgData.documents?.[1] || rgData.documents?.[0];
+        if (region) {
+          locationQueryText = ` ${region.region_3depth_name || region.region_2depth_name}`;
+        }
+      } catch (e) {}
     }
 
     // 검색 키워드 조합
@@ -338,67 +344,49 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       ? foodKeys.map(f => FOOD_KEYWORDS[f] || f)
       : ['맛집'];
 
-    // 조건 키워드 조합 (예약, 주차, 룸, 테라스, 포장)
+    // 조건 키워드 조합
     const conditionSuffix = [...filterGroups.conditions]
       .filter(c => CONDITION_KEYWORDS[c])
       .map(c => CONDITION_KEYWORDS[c])
       .join(' ');
 
-    // 카페 포함 여부에 따라 카테고리 코드 결정
-    const isCafeOnly = foodKeys.length === 1 && foodKeys[0] === 'cafe';
-    const hasCafe = foodKeys.includes('cafe');
+    // 중복 제거 헬퍼
+    const dedupe = (arr) => {
+      const seen = new Set();
+      return arr.filter(p => {
+        const key = p.place_name + p.road_address_name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
 
-    const locationSuffix = locationText && locationText !== '현재 위치' ? ` ${locationText}` : '';
-
-    let places = [];
-
-    // ── 3단계 폴백 검색 ──
-    // 1단계: 음식종류 + 조건 + 위치
-    // 2단계: 결과 없으면 조건 제거
-    // 3단계: 그래도 없으면 '맛집'으로 폴백
-    async function smartFetch(baseKeyword, category) {
+    // ── 3단계 폴백 검색 (네이버 API) ──
+    async function smartFetch(baseKeyword) {
       const steps = [
-        `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationSuffix}`,
-        `${baseKeyword}${locationSuffix}`,
+        `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationQueryText}`,
+        `${baseKeyword}${locationQueryText}`,
         baseKeyword,
       ];
       for (const query of steps) {
-        const result = await fetchPlaces({ query, lat, lng, category });
+        const result = await fetchPlacesNaver(query);
         if (result.length > 0) return result;
       }
       return [];
     }
 
-    // 중복 제거 헬퍼 (place id 기준)
-    const dedupe = (arr) => [...new Map(arr.map(p => [p.id, p])).values()];
-
+    let places = [];
     if (filterGroups.menuText) {
-      // 직접 입력: FD6(음식점) + CE7(카페) 병렬 검색 후 합치기
-      const [foodRes, cafeRes] = await Promise.all([
-        smartFetch(filterGroups.menuText, 'FD6'),
-        smartFetch(filterGroups.menuText, 'CE7'),
-      ]);
-      places = dedupe([...foodRes, ...cafeRes]);
-    } else if (isCafeOnly) {
-      places = await smartFetch('카페', 'CE7');
+      places = await smartFetch(filterGroups.menuText);
     } else {
-      const nonCafeKeywords = queries.filter(q => q !== '카페');
-      const searchTargets = nonCafeKeywords.length > 0 ? nonCafeKeywords : ['맛집'];
-
-      // 각 카테고리를 독립적으로 병렬 검색 후 합치기
-      const results = await Promise.all(searchTargets.map(kw => smartFetch(kw, 'FD6')));
+      const results = await Promise.all(queries.map(kw => smartFetch(kw)));
       places = dedupe(results.flat());
-
-      if (hasCafe) {
-        const cafes = await smartFetch('카페', 'CE7');
-        places = dedupe([...places, ...cafes]);
-      }
     }
 
     showResults(places, lat, lng, conditionSuffix, [...filterGroups.conditions], isGpsSearch);
   } catch (e) {
     console.error(e);
-    alert('검색 중 오류가 발생했어요. API 키와 인터넷 연결을 확인해주세요.');
+    alert('검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.');
   } finally {
     setLoading(false);
   }
@@ -417,29 +405,42 @@ async function geocode(query) {
   return null;
 }
 
-// ── 카카오 API: 장소 검색 ──
-async function fetchPlaces({ query, lat, lng, category }) {
-  const baseParams = { query, size: 15, sort: 'accuracy' };
-  // 좌표가 있을 때만 위치 반경 적용, 없으면 전국 검색
-  if (lat && lng) {
-    baseParams.x = lng;
-    baseParams.y = lat;
-    baseParams.radius = 5000;
-  }
-  if (category) baseParams.category_group_code = category;
+// ── 네이버 API: 장소 검색 (서버 프록시 경유) ──
+function naverToPlace(item) {
+  const name = item.title.replace(/<\/?b>/g, '');
+  // mapx/mapy: 네이버는 WGS84 × 10^7 정수
+  const lng = parseInt(item.mapx) / 10000000;
+  const lat = parseInt(item.mapy) / 10000000;
+  const shortAddr = (item.roadAddress || item.address || '').split(' ').slice(0, 3).join(' ');
+  const naverMapUrl = `https://map.naver.com/v5/search/${encodeURIComponent(name + ' ' + shortAddr)}`;
+  const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(name)}`;
+  return {
+    id:               name + (item.roadAddress || item.address),
+    place_name:       name,
+    address_name:     item.address     || '',
+    road_address_name: item.roadAddress || '',
+    phone:            item.telephone   || '',
+    place_url:        naverMapUrl,      // 네이버지도 검색 링크
+    kakao_url:        kakaoMapUrl,      // 카카오맵 검색 링크
+    category_name:    item.category    || '',
+    x:                String(lng),
+    y:                String(lat),
+    distance:         '',
+  };
+}
 
-  const [res1, res2] = await Promise.all([
-    fetch(
-      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 1 })}`,
-      { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
-    ),
-    fetch(
-      `https://dapi.kakao.com/v2/local/search/keyword.json?${new URLSearchParams({ ...baseParams, page: 2 })}`,
-      { headers: { Authorization: `KakaoAK ${KAKAO_API_KEY}` } }
+async function fetchPlacesNaver(query) {
+  // 네이버 지역검색: 한 번에 최대 5개, 4페이지 병렬 = 최대 20개
+  const starts = [1, 6, 11, 16];
+  const results = await Promise.all(
+    starts.map(start =>
+      fetch(`/api/search?${new URLSearchParams({ query, display: 5, start })}`)
+        .then(r => r.json())
+        .then(d => (d.items || []).map(naverToPlace))
+        .catch(() => [])
     )
-  ]);
-  const [data1, data2] = await Promise.all([res1.json(), res2.json()]);
-  return [...(data1.documents || []), ...(data2.documents || [])];
+  );
+  return results.flat();
 }
 
 // ── 로딩 상태 ──
@@ -484,18 +485,16 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
   randomBtn.style.display = 'block';
   randomBtn.textContent = '🎲 랜덤 뽑기';
 
-  // 거리 계산:
-  // GPS 검색 → 실제 내 위치(userLat/userLng) 기준 Haversine
-  // 텍스트 검색 → 카카오 API가 반환한 place.distance (검색 중심 기준)
-  const fromUser = isGpsSearch && !!(userLat && userLng);
+  // 거리 계산: GPS면 실제 내 위치 기준, 텍스트 입력이면 검색 중심 기준
+  const refLat = (isGpsSearch && userLat) ? userLat : lat;
+  const refLng = (isGpsSearch && userLng) ? userLng : lng;
 
   function formatDist(place) {
-    let d;
-    if (fromUser) {
-      d = calcDistance(userLat, userLng, parseFloat(place.y), parseFloat(place.x));
-    } else {
-      d = parseInt(place.distance);
-    }
+    if (!refLat || !refLng) return '';
+    const placeLat = parseFloat(place.y);
+    const placeLng = parseFloat(place.x);
+    if (!placeLat || !placeLng) return '';
+    const d = calcDistance(refLat, refLng, placeLat, placeLng);
     if (!d) return '';
     return d < 1000 ? `${d}m` : `${(d / 1000).toFixed(1)}km`;
   }
@@ -521,18 +520,11 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
     const categoryShort = place.category_name.split(' > ').slice(-2).join(' · ');
     const address = place.road_address_name || place.address_name;
 
-    // 네이버 검색용: 지점명(~점, ~호점, ~본점) 제거 + 짧은 주소 추가
-    const baseName = place.place_name
-      .replace(/\s+[가-힣\d·\-]+[점호]$/, '')  // 논현본점, 강남점, 2호점 등 제거
-      .replace(/\s+본점$/, '')                   // 독립된 '본점' 제거
-      .trim() || place.place_name;
-    const shortAddr = address.split(' ').slice(0, 3).join(' '); // 서울 강남구 논현로
-    const naverQuery = encodeURIComponent(`${baseName} ${shortAddr}`);
 
     card.innerHTML = `
       <div class="card-top">
         <span class="category">${categoryShort}</span>
-        ${dist ? `<span class="dist-badge">📍 ${fromUser ? '내 위치에서 ' : ''}${dist}</span>` : ''}
+        ${dist ? `<span class="dist-badge">📍 ${isGpsSearch ? '내 위치에서 ' : ''}${dist}</span>` : ''}
       </div>
       <div class="name">
         <span class="card-emoji">${emoji}</span> ${place.place_name}
@@ -541,8 +533,8 @@ function showResults(places, lat, lng, conditionSuffix = '', selectedConditions 
       ${place.phone ? `<div class="phone">📞 ${place.phone}</div>` : ''}
       <div class="tags"></div>
       <div class="card-links">
-        <a class="map-link menu" href="${place.place_url}" target="_blank">🍽️ 메뉴·가격 보기</a>
-        <a class="map-link naver" href="https://map.naver.com/v5/search/${naverQuery}" target="_blank">🗺️ 네이버지도</a>
+        <a class="map-link naver" href="${place.place_url}" target="_blank">🗺️ 네이버지도</a>
+        <a class="map-link menu" href="${place.kakao_url}" target="_blank">🗺️ 카카오맵</a>
       </div>
     `;
     list.appendChild(card);
