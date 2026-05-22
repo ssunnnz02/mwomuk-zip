@@ -320,12 +320,13 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       if (coords) { lat = coords.lat; lng = coords.lng; }
     }
 
-    // 좌표 → 동네명으로 변환해서 네이버 쿼리에 포함
-    // (사용자가 "스프링앤플라워" 같은 가게명을 위치에 입력해도
-    //  geocode→역지오코딩으로 "삼성동" 같은 동네명으로 바꿔 쿼리에 사용)
+    // 네이버 쿼리에 포함할 위치 텍스트
+    // - 텍스트 입력: 원본 그대로 사용 ("스프링앤플라워", "역삼역" 등)
+    // - GPS: 좌표→역지오코딩으로 동네명 추출
     let locationQueryText = '';
-    const shouldReverseGeocode = (lat && lng) && (locationText || isGpsSearch);
-    if (shouldReverseGeocode) {
+    if (locationText && !isGpsSearch) {
+      locationQueryText = ` ${locationText}`;
+    } else if (isGpsSearch && lat && lng) {
       try {
         const rgRes = await fetch(
           `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${lng}&y=${lat}`,
@@ -336,10 +337,7 @@ document.getElementById('search-btn').addEventListener('click', async () => {
         if (region) {
           locationQueryText = ` ${region.region_3depth_name || region.region_2depth_name}`;
         }
-      } catch (e) {
-        // 역지오코딩 실패 시 원본 텍스트 그대로 사용 (폴백)
-        if (!isGpsSearch) locationQueryText = ` ${locationText}`;
-      }
+      } catch (e) {}
     }
 
     // 검색 키워드 조합
@@ -355,10 +353,11 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       .join(' ');
 
     // 중복 제거 헬퍼
+    // 전화번호가 있으면 이름+전화번호(지점 구별 확실), 없으면 이름+주소 앞 20자
     const dedupe = (arr) => {
       const seen = new Set();
       return arr.filter(p => {
-        const key = p.place_name + p.road_address_name;
+        const key = p.place_name + (p.phone ? p.phone : p.road_address_name.slice(0, 20));
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
