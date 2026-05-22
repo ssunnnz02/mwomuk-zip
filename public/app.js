@@ -368,37 +368,71 @@ document.getElementById('search-btn').addEventListener('click', async () => {
       });
     };
 
-    // ── 카테고리 검색: 카카오 API (카테고리 정확, 반경 5km 지원) ──
+    // GPS 검색이 아닐 때만 원본 위치 텍스트를 쿼리에 사용
+    const rawLoc = !isGpsSearch ? locationText : '';
+
+    // ── 카테고리 검색: 카카오 API ──
+    // 1순위: 좌표 반경 5km (가장 정확)
+    // 2순위: 텍스트 검색 폴백 (반경 결과 없을 때)
     async function smartFetchKakao(baseKeyword) {
+      const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
+
+      // 1순위: 좌표 + 반경 5km
       if (lat && lng) {
-        // 좌표 있음 → 반경 5km 내 검색 (조건 포함 → 조건 없이 순서로 시도)
-        const withCond = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
-        const r1 = await fetchPlacesKakao(withCond, lat, lng);
+        const r1 = await fetchPlacesKakao(full, lat, lng);
         if (r1.length > 0) return r1;
-        return fetchPlacesKakao(baseKeyword, lat, lng);
-      } else {
-        // 좌표 없음 → 키워드+위치텍스트 검색
-        const steps = [
-          `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationQueryText}`,
-          `${baseKeyword}${locationQueryText}`,
-          baseKeyword,
-        ];
-        for (const q of steps) {
-          const r = await fetchPlacesKakao(q, null, null);
-          if (r.length > 0) return r;
+        if (full !== baseKeyword) {
+          const r2 = await fetchPlacesKakao(baseKeyword, lat, lng);
+          if (r2.length > 0) return r2;
         }
-        return [];
       }
+
+      // 2순위: 텍스트 검색 (반경 실패 또는 좌표 없음)
+      // 원본 위치명("대전송촌초등학교") → 추출 동네명("송촌동") → 전국 순으로 시도
+      const candidates = [
+        rawLoc                     ? `${full} ${rawLoc}`                 : null,
+        rawLoc && full !== baseKeyword ? `${baseKeyword} ${rawLoc}`      : null,
+        locationQueryText?.trim()  ? `${full}${locationQueryText}`       : null,
+        locationQueryText?.trim() && full !== baseKeyword
+                                   ? `${baseKeyword}${locationQueryText}` : null,
+        baseKeyword,
+      ].filter(q => q && q.trim());
+
+      for (const q of [...new Set(candidates)]) {
+        const r = await fetchPlacesKakao(q, null, null);
+        if (r.length > 0) {
+          if (lat && lng) {
+            // 텍스트 검색 결과: 5km 후처리 필터 (없으면 10km)
+            const f5 = r.filter(p => {
+              const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
+              return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 5000;
+            });
+            if (f5.length > 0) return f5;
+            const f10 = r.filter(p => {
+              const pLat = parseFloat(p.y), pLng = parseFloat(p.x);
+              return !pLat || !pLng || calcDistance(lat, lng, pLat, pLng) <= 10000;
+            });
+            if (f10.length > 0) return f10;
+          } else {
+            return r;
+          }
+        }
+      }
+      return [];
     }
 
     // ── 직접입력 검색: 네이버 API (특정 메뉴 커버리지 우수) ──
     async function smartFetchNaver(baseKeyword) {
+      const full = `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}`;
       const steps = [
-        `${baseKeyword}${conditionSuffix ? ' ' + conditionSuffix : ''}${locationQueryText}`,
-        `${baseKeyword}${locationQueryText}`,
+        locationQueryText?.trim() ? `${full}${locationQueryText}`      : null,
+        rawLoc                    ? `${full} ${rawLoc}`                : null,
+        locationQueryText?.trim() ? `${baseKeyword}${locationQueryText}` : null,
+        rawLoc                    ? `${baseKeyword} ${rawLoc}`         : null,
         baseKeyword,
-      ];
-      for (const query of steps) {
+      ].filter(q => q && q.trim());
+
+      for (const query of [...new Set(steps)]) {
         const result = await fetchPlacesNaver(query);
         if (result.length > 0) return result;
       }
